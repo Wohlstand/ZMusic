@@ -41,6 +41,18 @@
 #include "opnmidi.h"
 
 OpnConfig opnConfig;
+static OpnConfig opnConfigCache;
+
+struct OpnDeleter
+{
+	void operator()(OPN2_MIDIPlayer* b)
+	{
+		if (b)
+			opn2_close(b);
+	}
+};
+
+static std::unique_ptr<OPN2_MIDIPlayer, OpnDeleter> opnCache;
 
 class OPNMIDIDevice : public SoftSynthMIDIDevice
 {
@@ -48,11 +60,13 @@ class OPNMIDIDevice : public SoftSynthMIDIDevice
 public:
 	OPNMIDIDevice(const OpnConfig *config);
 	~OPNMIDIDevice();
-	
+
+	int GetTechnology() const override;
+	std::string GetStats() override;
 	
 	int OpenRenderer() override;
 	int GetDeviceType() const override { return MDEV_OPN; }
-	
+
 protected:
 	void HandleEvent(int status, int parm1, int parm2) override;
 	void HandleLongEvent(const uint8_t *data, int len) override;
@@ -83,24 +97,55 @@ enum
 #include "data/xg.h"
 
 OPNMIDIDevice::OPNMIDIDevice(const OpnConfig *config)
-	:SoftSynthMIDIDevice(44100)
+	:SoftSynthMIDIDevice(48000)
 {
-	Renderer = opn2_init(44100);	// todo: make it configurable
+	bool init = false;
+	if (!opnCache.get())
+	{
+		init = true;
+		opnCache.reset(opn2_init(48000));
+	}
+	Renderer = opnCache.get();	// todo: make it configurable
+
 	if (Renderer != nullptr)
 	{
-		if (!LoadCustomBank(config))
+		if (init || opnConfigCache.opn_use_custom_bank != config->opn_use_custom_bank || opnConfigCache.opn_custom_bank != config->opn_custom_bank)
 		{
-			if(config->default_bank.size() == 0)
+			if (!LoadCustomBank(config))
 			{
-				opn2_openBankData(Renderer, xg_default, sizeof(xg_default));
+				if (config->default_bank.size() == 0)
+				{
+					opn2_openBankData(Renderer, xg_default, sizeof(xg_default));
+				}
+				else opn2_openBankData(Renderer, config->default_bank.data(), (long)config->default_bank.size());
 			}
-			else opn2_openBankData(Renderer, config->default_bank.data(), (long)config->default_bank.size());
+			opnConfigCache.opn_custom_bank = config->opn_custom_bank;
+			opnConfigCache.opn_use_custom_bank = config->opn_use_custom_bank;
 		}
 
-		opn2_switchEmulator(Renderer, (int)config->opn_emulator_id);
-		opn2_setRunAtPcmRate(Renderer, (int)config->opn_run_at_pcm_rate);
-		opn2_setNumChips(Renderer, config->opn_chips_count);
-		opn2_setSoftPanEnabled(Renderer, (int)config->opn_fullpan);
+		if (init || opnConfigCache.opn_emulator_id != config->opn_emulator_id)
+		{
+			opn2_switchEmulator(Renderer, (int)config->opn_emulator_id);
+			opnConfigCache.opn_emulator_id = config->opn_emulator_id;
+		}
+
+		if (init || opnConfigCache.opn_run_at_pcm_rate != config->opn_run_at_pcm_rate)
+		{
+			opn2_setRunAtPcmRate(Renderer, (int)config->opn_run_at_pcm_rate);
+			opnConfigCache.opn_run_at_pcm_rate = config->opn_run_at_pcm_rate;
+		}
+
+		if (init || opnConfigCache.opn_chips_count != config->opn_chips_count)
+		{
+			opn2_setNumChips(Renderer, config->opn_chips_count);
+			opnConfigCache.opn_chips_count = config->opn_chips_count;
+		}
+
+		if (init || opnConfigCache.opn_fullpan != config->opn_fullpan)
+		{
+			opn2_setSoftPanEnabled(Renderer, (int)config->opn_fullpan);
+			opnConfigCache.opn_fullpan = config->opn_fullpan;
+		}
 	}
 	else
 	{
@@ -119,8 +164,42 @@ OPNMIDIDevice::~OPNMIDIDevice()
 	Close();
 	if (Renderer != nullptr)
 	{
-		opn2_close(Renderer);
+		// opn2_close(Renderer);
+//		opn2_reset(Renderer);
+		Renderer = nullptr;
 	}
+}
+
+//==========================================================================
+//
+// OPNMIDIDevice :: GetTechnology
+//
+//==========================================================================
+
+int OPNMIDIDevice::GetTechnology() const
+{
+	return MIDIDEV_FMSYNTH;
+}
+
+//==========================================================================
+//
+// OPNMIDIDevice :: GetStats
+//
+//==========================================================================
+
+std::string OPNMIDIDevice::GetStats()
+{
+	std::string out;
+	std::string attrib;
+
+	if (Renderer)
+	{
+		out.resize(opnConfig.opn_chips_count * 6);
+		attrib.resize(opnConfig.opn_chips_count * 6);
+		opn2_describeChannels(Renderer, &out[0], &attrib[0], out.size());
+	}
+
+	return out;
 }
 
 //==========================================================================
@@ -153,7 +232,7 @@ int OPNMIDIDevice::LoadCustomBank(const OpnConfig *config)
 
 int OPNMIDIDevice::OpenRenderer()
 {
-	opn2_rt_resetState(Renderer);
+//	opn2_rt_resetState(Renderer);
 	return 0;
 }
 

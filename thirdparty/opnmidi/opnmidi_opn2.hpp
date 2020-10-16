@@ -62,6 +62,10 @@ private:
     std::vector<uint8_t>        m_regLFOSens;
     //! LFO setup registry cache
     uint8_t                     m_regLFOSetup;
+    //! Last used chip emulator
+    int                         m_lastEmulator;
+    //! Last used sample rate
+    unsigned long               m_lastPcmRate;
 
 public:
     /**
